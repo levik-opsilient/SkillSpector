@@ -1,4 +1,18 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Batch scanner for SkillSpector with multilingual enhancement and concurrent execution.
 
 Scans a directory of AI agent skills in parallel (configurable worker pool)
@@ -10,10 +24,9 @@ Concurrency model
 -----------------
 Each skill runs the full ``graph.invoke(state)`` pipeline in a dedicated
 thread via :class:`~concurrent.futures.ThreadPoolExecutor`.  The number of
-parallel workers is controlled by ``--workers`` (default 4).  A 300-second
-timeout and event-loop-crash retry keep the batch moving when the graph's
-internal ``asyncio.run()`` calls encounter connection hiccups.  This sits
-on top of the two built-in parallelism layers:
+parallel workers is controlled by ``--workers`` (default 4).  A 90-second
+per-skill timeout prevents stalled workers from blocking the batch.  This
+sits on top of two built-in parallelism layers:
 
 * **Layer 1** — 20 analyzers fan-out inside the LangGraph (per-skill)
 * **Layer 2** — :meth:`~skillspector.llm_analyzer_base.LLMAnalyzerBase.arun_batches`
@@ -47,8 +60,6 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 from skillspector.constants import MODEL_CONFIG
 from skillspector.logging_config import set_level
 
@@ -132,11 +143,6 @@ def _scan_skill(
         rel_name = str(skill_dir.relative_to(root))
     except ValueError:
         rel_name = skill_dir.name
-
-    # Guard — non-English without LLM
-    if lang != "en" and not use_llm and require_llm:
-        # Warning is printed by the caller after collecting the result
-        pass
 
     # Core scan via the LangGraph graph
     entry, error_msg = run_one(

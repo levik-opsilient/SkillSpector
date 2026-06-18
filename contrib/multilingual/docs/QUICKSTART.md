@@ -10,17 +10,39 @@ source .venv/bin/activate
 skillspector scan ./tests/fixtures/malicious_skill/ --no-llm
 ```
 
-Set up API keys for LLM mode (`.env` at repo root):
+Set up API keys for LLM mode (`.env` at repo root).  Copy the template:
 
 ```bash
-# Single key (standard OpenAI-compatible)
+cp contrib/multilingual/.env.example .env
+# Edit .env with your actual keys
+```
+
+> ⚠️ **Parallel LLM scanning requires multiple API keys.**  Each worker thread
+> issues LLM calls concurrently.  With 1 key and 4 workers, you will hit rate
+> limits (HTTP 429) almost immediately.  **Configure at least as many keys as
+> workers** — 10 keys for `--workers 8` is a safe ratio.  The built-in
+> ApiKeyPool handles automatic failover when a key is rate-limited.
+>
+> If you only have 1 key, use `--workers 1` for LLM mode, or `--no-llm` for
+> static-only mode (no API keys needed at all).
+
+```bash
+# Single key — use --workers 1 only
 OPENAI_API_KEY=sk-or-xxxxxxxxxxxxxxxxxxxxxxxx
 
-# Multi-key pool (recommended for batch)
+# Multi-key pool — required for --workers >= 2
+# Format: key|base_url|model, one per line or semicolon-delimited
 SKILLSPECTOR_API_KEYS="
 sk-or-xxx1|https://api.deepseek.com/v1|deepseek-v4-flash
 sk-or-xxx2|https://api.deepseek.com/v1|deepseek-v4-flash
-...
+sk-or-xxx3|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx4|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx5|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx6|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx7|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx8|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx9|https://api.deepseek.com/v1|deepseek-v4-flash
+sk-or-xxx10|https://api.deepseek.com/v1|deepseek-v4-flash
 "
 
 # Active provider
@@ -70,6 +92,118 @@ python -m contrib.multilingual.batch_scan ./skills/ -f json -o report.json
 # Markdown — good for PR comments, docs
 python -m contrib.multilingual.batch_scan ./skills/ -f markdown -o report.md
 ```
+
+### Example: Terminal Output (fixture scan with 8 workers)
+
+```
+$ python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 8
+
+SkillSpector Batch Scan — 23 skill(s) in ./tests/fixtures  (8 workers, 10 API keys)
+
+  [7/23] safe_skill → 0/100 LOW (0 issue(s))
+  [8/23] sdi/sdi1_mismatch → 97/100 CRITICAL (6 issue(s))
+  [3/23] mcp_mismatched_skill → 100/100 CRITICAL (9 issue(s))
+  [1/23] malicious_skill → 100/100 CRITICAL (14 issue(s))
+  [11/23] sdi/sdi4_divergence → 100/100 CRITICAL (8 issue(s))
+  [19/23] ssd/ssd1_semantic_injection → 100/100 CRITICAL (4 issue(s))
+  [5/23] mcp_poisoned_tool → 100/100 CRITICAL (16 issue(s))
+
+╭──────────────────────────────────────────────────────────────────╮
+│ SkillSpector Batch Scan Report                                   │
+╰────────────────── v2.2.3  |  Multilingual Enhanced ──────────────╯
+
+Total: 23 skill(s) scanned
+
+Source Breakdown:
+  .                                 7 skills, 5 CRITICAL, 1 MEDIUM
+  sdi                               5 skills, 4 CRITICAL, 1 MEDIUM
+  sqp                               6 skills, 1 CRITICAL, 1 HIGH
+  ssd                               5 skills, 3 CRITICAL, 1 HIGH
+
+                Skills by Risk Score (23 completed)
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━┓
+┃ Skill              ┃ LR ┃   Score ┃ Severity ┃ Issues ┃ Lang ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━┩
+│ chef-assistant     │ ✓  │ 100/100 │ CRITICAL │     14 │ en   │
+│ friendly-greeter   │ ✓  │ 100/100 │ CRITICAL │      9 │ en   │
+│ reаd_data          │ ✓  │ 100/100 │ CRITICAL │     16 │ en   │
+│ deploy-service     │ ✓  │ 100/100 │ CRITICAL │      5 │ en   │
+│ onboarding-guide   │ ✓  │ 100/100 │ CRITICAL │      9 │ en   │
+│ ...                │    │         │          │        │      │
+│ safe-greeting      │ ✓  │   0/100 │ LOW      │      0 │ en   │
+│ code-reviewer      │ ✓  │   0/100 │ LOW      │      0 │ en   │
+└────────────────────┴────┴─────────┴──────────┴────────┴──────┘
+
+15 skill(s) with HIGH or CRITICAL risk — review immediately
+2 skill(s) with MEDIUM risk — review before installing
+6 skill(s) with LOW risk — likely safe
+```
+
+**Columns:** `LR` = Language Reliability — ✓ for English (full coverage), ⚠ for non-English (gap-fill applied).
+
+### Example: JSON Output (excerpt)
+
+```json
+{
+  "batch": {
+    "scanned_at": "2026-06-19T01:20:00+00:00",
+    "total_skills": 23,
+    "scan_mode": "multilingual-enhanced",
+    "enhancements": {
+      "language_detection": "unicode-script-ratio",
+      "gap_fill_applied": 0,
+      "gap_fill_findings": 0
+    }
+  },
+  "skills": [
+    {
+      "skill": {
+        "name": "malicious_skill",
+        "source": "malicious_skill",
+        "source_group": ".",
+        "language": "en",
+        "scanned_at": "2026-06-19T01:20:05+00:00"
+      },
+      "risk_assessment": {
+        "score": 100,
+        "severity": "CRITICAL",
+        "recommendation": "DO NOT INSTALL"
+      },
+      "issues": [
+        {
+          "id": "E1",
+          "message": "Skill executes shell commands without user consent",
+          "severity": "CRITICAL",
+          "confidence": 1.0,
+          "language_compatible": true
+        }
+      ],
+      "scan_mode": "multilingual-enhanced",
+      "enhancements": {
+        "gap_fill_applied": false,
+        "gap_fill_findings": 0,
+        "english_keyword_rules_skipped": 0
+      }
+    }
+  ]
+}
+```
+
+### Example: Static-Only vs LLM Comparison
+
+Same 23 fixtures, same 4 workers:
+
+| Skill | `--no-llm` | LLM mode | Delta |
+|-------|-----------|----------|-------|
+| `ssd1_semantic_injection` | 0/100 (0) | 100/100 (4) | Static blind to semantic injection |
+| `ssd3_nl_exfiltration` | 0/100 (0) | 60/100 (3) | Static blind to NL exfiltration |
+| `ssd4_narrative_deception` | 10/100 (1) | 100/100 (9) | Static nearly blind |
+| `sdi4_divergence` | 13/100 (2) | 100/100 (8) | Static severely underestimates |
+| `sqp2_missing_warnings` | 26/100 (2) | 58/100 (3) | Static underestimates |
+| `safe_skill` | 0/100 (0) | 0/100 (0) | Correct — no false positive |
+| `ssd_clean` | 0/100 (0) | 0/100 (0) | Correct — no false positive |
+
+**Conclusion:** LLM semantic analyzers (SSD/SDI/SQP) catch vulnerabilities that static English-keyword patterns miss entirely. Clean skills remain clean — no false-positive inflation.
 
 ## Tuning Workers
 

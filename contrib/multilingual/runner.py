@@ -1,3 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Graph invocation helpers for batch scanning.
 
 Thin wrappers over ``skillspector.graph.graph`` — build initial state,
@@ -20,6 +35,7 @@ DeepSeek direct API) work correctly.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -257,12 +273,17 @@ def scan_state(skill_dir: Path, use_llm: bool) -> dict[str, object]:
     }
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def cleanup_result(result: dict[str, object]) -> None:
     """Remove the temporary directory created by the graph, if any.
 
-    Uses ``shutil.rmtree`` first.  Falls back to ``subprocess`` with a
-    10-second timeout when the tree contains dangling file handles (e.g.
-    stale asyncio HTTP connections after a provider error).
+    Uses ``shutil.rmtree`` first (cross-platform).  Falls back to a
+    platform-specific subprocess command with a 10-second timeout when
+    the tree contains dangling file handles (e.g. stale asyncio HTTP
+    connections after a provider error).
     """
     temp_dir = result.get("temp_dir_for_cleanup")
     if not temp_dir or not isinstance(temp_dir, str):
@@ -271,11 +292,20 @@ def cleanup_result(result: dict[str, object]) -> None:
         shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         try:
-            subprocess.run(
-                ["rm", "-rf", temp_dir],
-                timeout=10,
-                capture_output=True,
-            )
+            if _is_windows():
+                # rmdir /s removes directory tree; /q suppresses confirmation
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", "/s", "/q", temp_dir],
+                    timeout=10,
+                    capture_output=True,
+                    shell=False,
+                )
+            else:
+                subprocess.run(
+                    ["rm", "-rf", temp_dir],
+                    timeout=10,
+                    capture_output=True,
+                )
         except Exception:
             pass
 
