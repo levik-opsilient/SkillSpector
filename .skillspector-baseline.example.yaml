@@ -1,0 +1,36 @@
+# SkillSpector baseline (example)
+#
+# A baseline suppresses known/accepted findings so re-scans surface only NEW
+# issues. Pass it with:  skillspector scan <path> --baseline <this-file>
+# Generate a fingerprint baseline automatically: skillspector baseline <path>
+#
+# See docs/SUPPRESSION.md for the full reference.
+
+version: 1
+
+# Glob rules — human-authored, drift-tolerant (survive line/wording changes).
+# A finding is suppressed when EVERY field a rule sets glob-matches it.
+# Unspecified fields match anything. `reason` is required for auditability.
+rules:
+  # Suppress an entire rule across all skills (global pattern suppression).
+  - id: "SQP-1"
+    reason: "Trigger-phrase breadth is a skill-description nit, not a vulnerability"
+
+  # Suppress a rule family with a glob.
+  - id: "SQP-*"
+    message: "*telemetry*"
+    reason: "First-party internal telemetry; reviewed and accepted"
+
+  # Skill/file-scoped suppression of a specific false positive.
+  - id: "SSD-2"
+    path: "*deploy-topology*/SKILL.md"
+    message: "*run the exploit*"
+    reason: "False positive: 'run the exploit' is a lab test-workflow trigger phrase"
+
+# Fingerprints — exact, machine-generated suppressions (one per accepted
+# finding). Regenerate with `skillspector baseline` when a skill changes.
+fingerprints:
+  - hash: "sha256:0123456789abcdef"
+    rule_id: "SDI-2"
+    file: "baas-build-analysis/SKILL.md"
+    reason: "Accepted: first-party env detection (whoami / $BAAS_USERNAME)"
