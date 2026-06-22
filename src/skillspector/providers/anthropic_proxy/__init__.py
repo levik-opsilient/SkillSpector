@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Anthropic provider package (native api.anthropic.com chat models)."""
+"""Anthropic proxy provider package (Vertex-style raw-predict endpoints)."""
 
-from .provider import ANTHROPIC_BASE_URL, REGISTRY_PATH, AnthropicProvider
+from .provider import REGISTRY_PATH, AnthropicProxyProvider
 
-__all__ = ["ANTHROPIC_BASE_URL", "REGISTRY_PATH", "AnthropicProvider"]
+__all__ = ["REGISTRY_PATH", "AnthropicProxyProvider"]

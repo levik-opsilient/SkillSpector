@@ -58,7 +58,9 @@ class SkillspectorState(TypedDict, total=False):
     output_format: str
     report_body: str
 
-    # LLM: when False, LLM-based nodes return immediately without calling the LLM (see LLM_BASED_NODE_IDS)
+    # LLM: when False, LLM-based nodes (meta_analyzer, mcp_tool_poisoning's TP4,
+    # and the semantic_* analyzers) return immediately without calling the LLM.
+    # Each such node checks use_llm itself; there is no graph-level routing.
     use_llm: bool
 
     # Risk: report node sets these from risk_score
@@ -70,11 +72,6 @@ class SkillspectorState(TypedDict, total=False):
 
     # Additional YARA rules directory (user-specified via --yara-rules-dir)
     yara_rules_dir: str | None
-
-
-# Node IDs that use an LLM. Each such node should check use_llm at the top and return
-# immediately (e.g. fallback / no-op) when False; no graph-level routing.
-LLM_BASED_NODE_IDS: tuple[str, ...] = ("meta_analyzer", "mcp_tool_poisoning")
 
 
 class AnalyzerNodeResponse(TypedDict):

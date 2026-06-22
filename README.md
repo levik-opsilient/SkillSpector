@@ -14,7 +14,6 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 ## Documentation
 
 - **[Development guide](docs/DEVELOPMENT.md)** — Architecture, package layout, and how to extend the analyzer pipeline.
-- **[OSS_RELEASE.md](OSS_RELEASE.md)** — How to produce a public-OSS branch from this repo.
 
 ## Features
 
@@ -45,6 +44,64 @@ make install
 
 # Or install with development dependencies
 make install-dev
+```
+
+### Docker (no Python required)
+
+Run SkillSpector without installing Python by building it locally from the included [Dockerfile](Dockerfile). The image is based on the Docker Official Python `3.12-slim-bookworm` image.
+
+**Build the image:**
+
+```bash
+make docker-build
+# or: docker build -t skillspector .
+```
+
+**Scan a local directory** by mounting your current directory into `/scan`, the container's working directory:
+
+```bash
+docker run --rm -v "$PWD:/scan" skillspector scan ./my-skill/ --no-llm
+```
+
+**Scan with LLM analysis** by passing credentials with a local `.env` file:
+
+```bash
+cat > .env <<'EOF'
+SKILLSPECTOR_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+EOF
+```
+
+```bash
+docker run --rm \
+  -v "$PWD:/scan" \
+  --env-file .env \
+  skillspector scan ./my-skill/
+```
+
+Or pass credentials directly from your shell environment:
+
+```bash
+docker run --rm \
+  -v "$PWD:/scan" \
+  -e SKILLSPECTOR_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  skillspector scan ./my-skill/
+```
+
+**Write a report to the host filesystem** by writing to the mounted directory:
+
+```bash
+docker run --rm \
+  -v "$PWD:/scan" \
+  skillspector scan ./my-skill/ --no-llm --format json --output report.json
+```
+
+**Optional alias** for repeated static scans:
+
+```bash
+alias skillspector-docker='docker run --rm -v "$PWD:/scan" skillspector'
+skillspector-docker scan ./my-skill/ --no-llm
 ```
 
 ### Basic Usage
@@ -88,9 +145,10 @@ local OpenAI-compatible servers (Ollama, vLLM, llama.cpp) and managed
 inference gateways.
 
 | Provider (`SKILLSPECTOR_PROVIDER`) | Credential env var | Endpoint | Default model |
-|----------|----|----|----|
+| ---------- | ---- | ---- | ---- |
 | `openai` | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | api.openai.com (or any OpenAI-compatible URL) | `gpt-5.4` |
 | `anthropic` | `ANTHROPIC_API_KEY` | api.anthropic.com | `claude-opus-4-6` |
+| `anthropic_proxy` | `ANTHROPIC_PROXY_API_KEY` + `ANTHROPIC_PROXY_ENDPOINT_URL` | Any Vertex-style raw-predict proxy | `claude-sonnet-4-6` |
 | `nv_build` | `NVIDIA_INFERENCE_KEY` | build.nvidia.com | `deepseek-ai/deepseek-v4-flash` |
 
 ```bash
@@ -102,6 +160,13 @@ skillspector scan ./my-skill/
 # Anthropic
 export SKILLSPECTOR_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
+skillspector scan ./my-skill/
+
+# Anthropic via Vertex-style proxy (corporate gateways, GCP Vertex AI)
+export SKILLSPECTOR_PROVIDER=anthropic_proxy
+export ANTHROPIC_PROXY_ENDPOINT_URL=https://my-gateway.example.com/models/claude-sonnet-4-6:streamRawPredict
+export ANTHROPIC_PROXY_API_KEY=your-bearer-token
+export SKILLSPECTOR_MODEL=claude-sonnet-4-6
 skillspector scan ./my-skill/
 
 # NVIDIA build.nvidia.com
@@ -272,10 +337,7 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | TP3 | Parameter Description Injection | MEDIUM | Injection patterns in parameter definitions (overrides, system tokens, malicious defaults) |
 | TP4 | Description-Behavior Mismatch | MEDIUM | Declared tool description does not match actual code behavior (LLM-powered) |
 
-View all patterns:
-```bash
-skillspector patterns
-```
+All detected patterns are listed in the tables above.
 
 ## Risk Scoring
 
@@ -301,7 +363,7 @@ skillspector patterns
 ### Terminal Output
 
 ```
- SkillSpector Security Report  v0.1.0
+ SkillSpector Security Report  v2.0.0
 
 Skill: suspicious-skill
 Source: ./suspicious-skill/
@@ -347,8 +409,11 @@ Issues (2)
 | `OPENAI_API_KEY` | Credential for the OpenAI provider (`SKILLSPECTOR_PROVIDER=openai`). Also serves as the tier-2 fallback in the credential waterfall when the active provider returns no credentials. | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | Override the OpenAI endpoint (e.g. point at Ollama). | Optional |
 | `ANTHROPIC_API_KEY` | Credential for the Anthropic provider (`SKILLSPECTOR_PROVIDER=anthropic`). | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=anthropic` |
+| `ANTHROPIC_PROXY_ENDPOINT_URL` | Full endpoint URL for the Anthropic proxy provider (Vertex-style raw-predict). | Required when `SKILLSPECTOR_PROVIDER=anthropic_proxy` |
+| `ANTHROPIC_PROXY_API_KEY` | Bearer token for the Anthropic proxy provider. | Required when `SKILLSPECTOR_PROVIDER=anthropic_proxy` |
+| `ANTHROPIC_PROXY_API_VERSION` | `anthropic_version` value sent in the request body (default: `vertex-2023-10-16`). | Optional |
 | `SKILLSPECTOR_MODEL` | Override the active provider's default model. See the LLM Analysis table for each provider's default. | Optional |
-| `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled per-provider YAML registry (`src/skillspector/providers/<provider>.yaml`) with a custom path. | Optional |
+| `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled per-provider YAML registry (`src/skillspector/providers/<provider>/model_registry.yaml`) with a custom path. | Optional |
 | `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | Optional |
 
 ### CLI Options

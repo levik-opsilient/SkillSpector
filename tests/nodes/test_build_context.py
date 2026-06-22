@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from skillspector.constants import MODEL_CONFIG
 from skillspector.nodes.build_context import build_context
 from skillspector.state import SkillspectorState
@@ -70,6 +72,7 @@ def test_build_context_real_directory_with_skill_md(tmp_path: Path) -> None:
         "description": "For tests",
         "triggers": ["a", "b"],
         "permissions": ["read"],
+        "parameters": [],
     }
     assert result["ast_cache"] == {}
     assert result["previous_manifest"] is None
@@ -88,48 +91,43 @@ def test_build_context_real_directory_with_skill_md(tmp_path: Path) -> None:
 
 
 def test_build_context_missing_skill_path() -> None:
-    """Missing skill_path returns minimal state (including model_config, component_metadata)."""
+    """Missing skill_path raises instead of producing a clean empty scan."""
     state: SkillspectorState = {}
-    result = build_context(state)
-    assert result == {
-        "components": [],
-        "file_cache": {},
-        "ast_cache": {},
-        "manifest": {},
-        "previous_manifest": None,
-        "model_config": MODEL_CONFIG,
-        "component_metadata": [],
-        "has_executable_scripts": False,
-    }
+    with pytest.raises(ValueError, match="skill_path is required"):
+        build_context(state)
 
 
 def test_build_context_empty_skill_path() -> None:
-    """Empty skill_path returns minimal state."""
+    """Empty skill_path raises instead of producing a clean empty scan."""
     state: SkillspectorState = {"skill_path": ""}
-    result = build_context(state)
-    assert result["components"] == []
-    assert result["file_cache"] == {}
-    assert result["manifest"] == {}
+    with pytest.raises(ValueError, match="skill_path is required"):
+        build_context(state)
 
 
 def test_build_context_nonexistent_path() -> None:
-    """Non-existent path returns minimal state."""
+    """Non-existent path raises instead of producing a clean empty scan."""
     state: SkillspectorState = {"skill_path": "/nonexistent/path/xyz"}
-    result = build_context(state)
-    assert result["components"] == []
-    assert result["file_cache"] == {}
-    assert result["manifest"] == {}
+    with pytest.raises(ValueError, match="not an existing directory"):
+        build_context(state)
 
 
 def test_build_context_path_is_file_not_dir(tmp_path: Path) -> None:
-    """Path that is a file (not directory) returns minimal state."""
+    """Path that is a file raises instead of producing a clean empty scan."""
     f = tmp_path / "file.txt"
     f.write_text("x", encoding="utf-8")
     state: SkillspectorState = {"skill_path": str(f)}
+    with pytest.raises(ValueError, match="not an existing directory"):
+        build_context(state)
+
+
+def test_build_context_empty_directory_is_valid_empty_scan(tmp_path: Path) -> None:
+    """An existing empty directory is a valid scan target with no components."""
+    state: SkillspectorState = {"skill_path": str(tmp_path)}
     result = build_context(state)
     assert result["components"] == []
     assert result["file_cache"] == {}
     assert result["manifest"] == {}
+    assert result["model_config"] == MODEL_CONFIG
 
 
 def test_build_context_skips_skip_dirs(tmp_path: Path) -> None:
@@ -185,3 +183,28 @@ def test_build_context_skill_md_lowercase(tmp_path: Path) -> None:
     assert result["manifest"]["description"] == "d"
     assert "skill.md" in result["components"]
     assert "references/guide.md" in result["components"]
+
+
+def test_build_context_parses_parameters_from_frontmatter(tmp_path: Path) -> None:
+    """`parameters` frontmatter is preserved as dicts so MCP TP checks can reach it.
+
+    Regression guard: without this, the mcp_tool_poisoning parameter checks
+    (TP3 and parameter-scoped TP1/TP2) never fire on real scans because the
+    manifest carried no `parameters` key.
+    """
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: reader\n"
+        "description: reads data\n"
+        "parameters:\n"
+        "  - name: path\n"
+        "    description: file path to read\n"
+        "  - not-a-dict\n"  # non-dict entries are dropped
+        "---\n",
+        encoding="utf-8",
+    )
+    state: SkillspectorState = {"skill_path": str(tmp_path)}
+    result = build_context(state)
+    assert result["manifest"]["parameters"] == [
+        {"name": "path", "description": "file path to read"}
+    ]

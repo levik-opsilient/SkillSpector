@@ -15,16 +15,17 @@
 
 """Pluggable LLM provider package.
 
-The active provider supplies credentials, an OpenAI-compatible base URL,
-token-budget metadata, and per-slot default model labels.  Each provider
+The active provider supplies credentials, token-budget metadata, per-slot
+default model labels, and a native LangChain chat model. Each provider
 is its own subpackage with a ``provider.py`` and a bundled
 ``model_registry.yaml``.
 
 Selection happens via the ``SKILLSPECTOR_PROVIDER`` env var:
 
-    openai        → OpenAIProvider          (api.openai.com)
-    anthropic     → AnthropicProvider       (api.anthropic.com)
-    nv_build      → NvBuildProvider         (build.nvidia.com)
+    openai           → OpenAIProvider          (api.openai.com)
+    anthropic        → AnthropicProvider       (api.anthropic.com)
+    anthropic_proxy  → AnthropicProxyProvider  (Vertex-style raw-predict proxy)
+    nv_build         → NvBuildProvider         (build.nvidia.com)
 
 When unset, the selector defaults to ``nv_build``.
 """
@@ -32,12 +33,27 @@ When unset, the selector defaults to ``nv_build``.
 from __future__ import annotations
 
 import os
+from typing import NoReturn
 
-from .base import CredentialsProvider, ModelMetadataProvider
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from .base import ChatModelProvider, CredentialsProvider, LLMProvider, ModelMetadataProvider
 from .nv_build import NvBuildProvider
 
+NO_LLM_API_KEY_MESSAGE = (
+    "No LLM API key configured. Set the credential env var for the "
+    "active provider, or set OPENAI_API_KEY (and optionally "
+    "OPENAI_BASE_URL) to use a standard OpenAI-compatible endpoint. "
+    "Use --no-llm to skip LLM analysis and run static checks only."
+)
 
-def _select_active_provider() -> ModelMetadataProvider:
+
+def raise_no_llm_api_key_configured() -> NoReturn:
+    """Raise the shared no-LLM-credentials error."""
+    raise ValueError(NO_LLM_API_KEY_MESSAGE)
+
+
+def _select_active_provider() -> LLMProvider:
     """Construct the active provider based on ``SKILLSPECTOR_PROVIDER``."""
     name = os.environ.get("SKILLSPECTOR_PROVIDER", "").strip().lower()
 
@@ -49,6 +65,10 @@ def _select_active_provider() -> ModelMetadataProvider:
         from .anthropic import AnthropicProvider
 
         return AnthropicProvider()
+    if name == "anthropic_proxy":
+        from .anthropic_proxy import AnthropicProxyProvider
+
+        return AnthropicProxyProvider()
     if name == "nv_build":
         return NvBuildProvider()
     if name in ("nv_inference", ""):
@@ -63,7 +83,7 @@ def _select_active_provider() -> ModelMetadataProvider:
 
     raise ValueError(
         f"Unknown SKILLSPECTOR_PROVIDER: {name!r}. "
-        "Expected one of: openai, anthropic, nv_build (or unset)."
+        "Expected one of: openai, anthropic, anthropic_proxy, nv_build (or unset)."
     )
 
 
@@ -81,9 +101,62 @@ def resolve_provider_credentials() -> tuple[str, str | None] | None:
     return _select_active_provider().resolve_credentials()
 
 
+def _openai_fallback_provider() -> LLMProvider:
+    """Return the standard OpenAI fallback provider."""
+    from .openai import OpenAIProvider
+
+    return OpenAIProvider()
+
+
+def resolve_chat_model_credentials() -> tuple[str, str | None] | None:
+    """Return credentials used for chat model construction, including fallback."""
+    creds = resolve_provider_credentials()
+    if creds is not None:
+        return creds
+
+    return _openai_fallback_provider().resolve_credentials()
+
+
+def create_chat_model(
+    model: str,
+    *,
+    max_tokens: int,
+    timeout: float | None = 120,
+) -> BaseChatModel:
+    """Create the active provider's native LangChain chat model.
+
+    If the active provider is not configured, fall back to standard OpenAI
+    environment variables. This preserves the historical ``OPENAI_API_KEY``
+    escape hatch while letting configured providers choose their own client.
+    """
+    provider = _select_active_provider()
+    llm = provider.create_chat_model(model, max_tokens=max_tokens, timeout=timeout)
+    if llm is not None:
+        return llm
+
+    from .openai import OpenAIProvider
+
+    if not isinstance(provider, OpenAIProvider):
+        llm = _openai_fallback_provider().create_chat_model(
+            model,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        if llm is not None:
+            return llm
+
+    raise_no_llm_api_key_configured()
+
+
 __all__ = [
+    "ChatModelProvider",
     "CredentialsProvider",
+    "LLMProvider",
     "ModelMetadataProvider",
+    "NO_LLM_API_KEY_MESSAGE",
+    "create_chat_model",
     "get_metadata_provider",
+    "raise_no_llm_api_key_configured",
+    "resolve_chat_model_credentials",
     "resolve_provider_credentials",
 ]

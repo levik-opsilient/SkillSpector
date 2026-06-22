@@ -17,9 +17,11 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from skillspector.llm_analyzer_base import (
     Batch,
@@ -164,6 +166,16 @@ def _mock_get_chat_model(*_args, **_kwargs):
 MOCK_PATCH_TARGET = "skillspector.llm_analyzer_base.get_chat_model"
 
 
+class _RawTextAnalyzer(LLMAnalyzerBase):
+    """Test analyzer for raw-string mode."""
+
+    response_schema = None
+
+    def parse_response(self, response: object, batch: Batch) -> list[str]:
+        assert isinstance(response, str)
+        return [response]
+
+
 # ---------------------------------------------------------------------------
 # number_lines
 # ---------------------------------------------------------------------------
@@ -287,6 +299,40 @@ class TestBaseParseResponse:
 
 
 # ---------------------------------------------------------------------------
+# MetaAnalyzerResult — tolerate LLMs that stringify the `findings` array
+# ---------------------------------------------------------------------------
+
+
+class TestMetaAnalyzerResultFindingsValidator:
+    _FINDING = {
+        "pattern_id": "E2",
+        "start_line": 12,
+        "is_vulnerability": True,
+        "confidence": 0.9,
+        "intent": "malicious",
+        "impact": "high",
+    }
+
+    def test_findings_as_json_string(self) -> None:
+        """Some LLMs return the findings array as a JSON string, not a list."""
+        result = MetaAnalyzerResult.model_validate({"findings": json.dumps([self._FINDING])})
+        assert len(result.findings) == 1
+        assert result.findings[0].pattern_id == "E2"
+
+    def test_findings_as_native_list(self) -> None:
+        result = MetaAnalyzerResult.model_validate({"findings": [self._FINDING]})
+        assert len(result.findings) == 1
+
+    def test_findings_invalid_string_yields_empty(self) -> None:
+        result = MetaAnalyzerResult.model_validate({"findings": "not json"})
+        assert result.findings == []
+
+    def test_findings_non_list_json_yields_empty(self) -> None:
+        result = MetaAnalyzerResult.model_validate({"findings": json.dumps({"a": 1})})
+        assert result.findings == []
+
+
+# ---------------------------------------------------------------------------
 # LLMAnalyzerBase.collect_findings
 # ---------------------------------------------------------------------------
 
@@ -311,6 +357,35 @@ class TestCollectFindings:
     def test_empty_results(self) -> None:
         analyzer = LLMAnalyzerBase(base_prompt="test", model=self.MODEL)
         assert analyzer.collect_findings([]) == []
+
+
+# ---------------------------------------------------------------------------
+# LLMAnalyzerBase raw-string mode
+# ---------------------------------------------------------------------------
+
+
+class TestRawStringMode:
+    MODEL = "nvidia/openai/gpt-oss-120b"
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_run_batches_uses_message_text_for_content_blocks(self) -> None:
+        analyzer = _RawTextAnalyzer(base_prompt="test", model=self.MODEL)
+        analyzer._llm.invoke.return_value = AIMessage(content=[{"type": "text", "text": "chunk"}])
+
+        results = analyzer.run_batches([Batch(file_path="a.py", content="code")])
+
+        assert results[0][1] == ["chunk"]
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    async def test_arun_batches_uses_message_text_for_content_blocks(self) -> None:
+        analyzer = _RawTextAnalyzer(base_prompt="test", model=self.MODEL)
+        analyzer._llm.ainvoke = AsyncMock(
+            return_value=AIMessage(content=[{"type": "text", "text": "async chunk"}])
+        )
+
+        results = await analyzer.arun_batches([Batch(file_path="a.py", content="code")])
+
+        assert results[0][1] == ["async chunk"]
 
 
 # ---------------------------------------------------------------------------
@@ -407,9 +482,7 @@ class TestARunBatches:
         """When response_schema is None, arun_batches uses _llm.ainvoke."""
         analyzer = LLMAnalyzerBase(base_prompt="test", model=self.MODEL)
         analyzer._structured_llm = None
-        mock_response = MagicMock()
-        mock_response.content = "raw text"
-        analyzer._llm.ainvoke = AsyncMock(return_value=mock_response)
+        analyzer._llm.ainvoke = AsyncMock(return_value=AIMessage(content="raw text"))
 
         batch = Batch(file_path="a.py", content="code")
         with pytest.raises(NotImplementedError):
@@ -528,15 +601,13 @@ class TestLLMAnalysisResult:
         assert len(result.findings) == 1
         assert result.findings[0].confidence == 0.9
 
-    def test_confidence_validation(self) -> None:
-        with pytest.raises(ValueError):
-            LLMFinding(
-                rule_id="X",
-                message="x",
-                severity="LOW",
-                start_line=1,
-                confidence=1.5,
-            )
+    def test_confidence_is_clamped(self) -> None:
+        """Out-of-range confidence is clamped, not rejected, so a slightly off
+        model value does not fail the whole structured-output parse."""
+        hi = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=1.5)
+        lo = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=-0.3)
+        assert hi.confidence == 1.0
+        assert lo.confidence == 0.0
 
     def test_severity_validation(self) -> None:
         with pytest.raises(ValueError):
@@ -622,15 +693,25 @@ class TestMetaAnalyzerResult:
         assert len(result.findings) == 1
         assert result.findings[0].confidence == 0.9
 
-    def test_confidence_validation(self) -> None:
-        with pytest.raises(ValueError):
-            MetaAnalyzerFinding(
-                pattern_id="E1",
-                is_vulnerability=True,
-                confidence=1.5,
-                intent="malicious",
-                impact="high",
-            )
+    def test_confidence_is_clamped(self) -> None:
+        """Out-of-range confidence is clamped, not rejected, so a slightly off
+        model value does not fail the whole structured-output parse."""
+        high = MetaAnalyzerFinding(
+            pattern_id="E1",
+            is_vulnerability=True,
+            confidence=1.5,
+            intent="malicious",
+            impact="high",
+        )
+        low = MetaAnalyzerFinding(
+            pattern_id="E1",
+            is_vulnerability=True,
+            confidence=-0.2,
+            intent="malicious",
+            impact="high",
+        )
+        assert high.confidence == 1.0
+        assert low.confidence == 0.0
 
     def test_intent_validation(self) -> None:
         with pytest.raises(ValueError):
@@ -679,6 +760,54 @@ class TestMetaAnalyzerResult:
         assert d["confidence"] == 0.8
         assert d["explanation"] == ""
         assert d["start_line"] is None
+
+
+class TestStructuredOutputSchema:
+    """The response schemas must stay portable across structured-output backends.
+
+    Pydantic ge/le bounds emit JSON-schema ``minimum`` / ``maximum``, which some
+    OpenAI-compatible structured-output / tool-calling endpoints reject when they
+    validate the response schema. The ranges are enforced by runtime validators
+    instead, so these keywords must not appear in the emitted schema.
+    """
+
+    @staticmethod
+    def _numeric_keywords(schema: dict) -> set[str]:
+        found: set[str] = set()
+
+        def walk(node: object) -> None:
+            if isinstance(node, dict):
+                found.update(k for k in ("minimum", "maximum") if k in node)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(schema)
+        return found
+
+    def test_llm_finding_schema_has_no_numeric_bounds(self) -> None:
+        assert self._numeric_keywords(LLMFinding.model_json_schema()) == set()
+
+    def test_meta_finding_schema_has_no_numeric_bounds(self) -> None:
+        assert self._numeric_keywords(MetaAnalyzerFinding.model_json_schema()) == set()
+
+    def test_llm_finding_clamps_confidence(self) -> None:
+        hi = LLMFinding(rule_id="R", message="m", severity="LOW", start_line=1, confidence=1.5)
+        lo = LLMFinding(rule_id="R", message="m", severity="LOW", start_line=1, confidence=-0.3)
+        assert hi.confidence == 1.0
+        assert lo.confidence == 0.0
+
+    def test_llm_finding_clamps_start_line(self) -> None:
+        assert LLMFinding(rule_id="R", message="m", severity="LOW", start_line=0).start_line == 1
+        assert LLMFinding(rule_id="R", message="m", severity="LOW", start_line=42).start_line == 42
+
+    def test_llm_finding_start_line_is_required(self) -> None:
+        """start_line stays required: a finding with no location is rejected,
+        not materialised at line 1."""
+        with pytest.raises(ValueError):
+            LLMFinding(rule_id="R", message="m", severity="LOW")
 
 
 # ---------------------------------------------------------------------------
