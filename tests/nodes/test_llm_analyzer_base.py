@@ -601,13 +601,33 @@ class TestLLMAnalysisResult:
         assert len(result.findings) == 1
         assert result.findings[0].confidence == 0.9
 
-    def test_confidence_is_clamped(self) -> None:
-        """Out-of-range confidence is clamped, not rejected, so a slightly off
-        model value does not fail the whole structured-output parse."""
-        hi = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=1.5)
-        lo = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=-0.3)
-        assert hi.confidence == 1.0
-        assert lo.confidence == 0.0
+    def test_confidence_100_scale_normalized(self) -> None:
+        """Ollama and some models return confidence on 0-100 scale; must be normalized."""
+        f = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=100)
+        assert f.confidence == pytest.approx(1.0)
+
+    def test_confidence_85_scale_normalized(self) -> None:
+        f = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=85)
+        assert f.confidence == pytest.approx(0.85)
+
+    def test_confidence_negative_clamped_to_zero(self) -> None:
+        f = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=-10)
+        assert f.confidence == pytest.approx(0.0)
+
+    def test_confidence_overlarge_clamped_to_one(self) -> None:
+        """Values > 100 (e.g. 150) are divided then clamped."""
+        f = LLMFinding(rule_id="X", message="x", severity="LOW", start_line=1, confidence=150)
+        assert f.confidence == pytest.approx(1.0)
+
+    def test_confidence_validation(self) -> None:
+        with pytest.raises((ValueError, TypeError)):
+            LLMFinding(
+                rule_id="X",
+                message="x",
+                severity="LOW",
+                start_line=1,
+                confidence="not-a-number",
+            )
 
     def test_severity_validation(self) -> None:
         with pytest.raises(ValueError):
@@ -693,25 +713,34 @@ class TestMetaAnalyzerResult:
         assert len(result.findings) == 1
         assert result.findings[0].confidence == 0.9
 
-    def test_confidence_is_clamped(self) -> None:
-        """Out-of-range confidence is clamped, not rejected, so a slightly off
-        model value does not fail the whole structured-output parse."""
-        high = MetaAnalyzerFinding(
-            pattern_id="E1",
-            is_vulnerability=True,
-            confidence=1.5,
-            intent="malicious",
-            impact="high",
+    def test_confidence_100_scale_normalized(self) -> None:
+        """Ollama-style 0-100 scale must be normalized to 0-1."""
+        f = MetaAnalyzerFinding(
+            pattern_id="E1", is_vulnerability=True, confidence=100, intent="malicious", impact="high"
         )
-        low = MetaAnalyzerFinding(
-            pattern_id="E1",
-            is_vulnerability=True,
-            confidence=-0.2,
-            intent="malicious",
-            impact="high",
+        assert f.confidence == pytest.approx(1.0)
+
+    def test_confidence_75_scale_normalized(self) -> None:
+        f = MetaAnalyzerFinding(
+            pattern_id="E1", is_vulnerability=True, confidence=75, intent="malicious", impact="high"
         )
-        assert high.confidence == 1.0
-        assert low.confidence == 0.0
+        assert f.confidence == pytest.approx(0.75)
+
+    def test_confidence_negative_clamped(self) -> None:
+        f = MetaAnalyzerFinding(
+            pattern_id="E1", is_vulnerability=True, confidence=-5, intent="malicious", impact="high"
+        )
+        assert f.confidence == pytest.approx(0.0)
+
+    def test_confidence_validation(self) -> None:
+        with pytest.raises((ValueError, TypeError)):
+            MetaAnalyzerFinding(
+                pattern_id="E1",
+                is_vulnerability=True,
+                confidence="bad",
+                intent="malicious",
+                impact="high",
+            )
 
     def test_intent_validation(self) -> None:
         with pytest.raises(ValueError):
@@ -793,10 +822,12 @@ class TestStructuredOutputSchema:
     def test_meta_finding_schema_has_no_numeric_bounds(self) -> None:
         assert self._numeric_keywords(MetaAnalyzerFinding.model_json_schema()) == set()
 
-    def test_llm_finding_clamps_confidence(self) -> None:
-        hi = LLMFinding(rule_id="R", message="m", severity="LOW", start_line=1, confidence=1.5)
+    def test_llm_finding_normalizes_confidence(self) -> None:
+        # Values > 1.0 are treated as 0-100 scale and rescaled: 85 → 0.85
+        hi = LLMFinding(rule_id="R", message="m", severity="LOW", start_line=1, confidence=85)
+        # Negative values are clamped to 0.0
         lo = LLMFinding(rule_id="R", message="m", severity="LOW", start_line=1, confidence=-0.3)
-        assert hi.confidence == 1.0
+        assert hi.confidence == pytest.approx(0.85)
         assert lo.confidence == 0.0
 
     def test_llm_finding_clamps_start_line(self) -> None:

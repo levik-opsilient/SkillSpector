@@ -76,12 +76,14 @@ class MetaAnalyzerFinding(BaseModel):
     explanation: str = Field(default="", description="Why this is dangerous (2-3 sentences)")
     remediation: str = Field(default="", description="How to fix the issue (actionable steps)")
 
-    @field_validator("confidence")
+    @field_validator("confidence", mode="before")
     @classmethod
-    def _clamp_confidence(cls, v: float) -> float:
-        # Clamp into [0.0, 1.0] so a slightly out-of-range model value
-        # normalises instead of failing the structured-output parse.
-        return min(1.0, max(0.0, v))
+    def _normalize_confidence(cls, v: object) -> float:
+        """Accept 0-100 scale (e.g. from Ollama) and normalize to [0, 1]."""
+        v = float(v)  # raises TypeError/ValueError for non-numeric inputs
+        if v > 1.0:
+            v = v / 100.0
+        return max(0.0, min(1.0, v))
 
 
 class OverallAssessment(BaseModel):
