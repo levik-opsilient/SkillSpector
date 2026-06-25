@@ -140,7 +140,10 @@ def _scan_state(
 
 
 def _result_body(result: dict) -> str:
-    return result.get("report_body") or json.dumps(result.get("sarif_report"), indent=2) or ""
+    report_body = result.get("report_body") or ""
+    if not report_body and result.get("sarif_report") is not None:
+        report_body = json.dumps(result["sarif_report"], indent=2)
+    return report_body
 
 
 def _write_result(
