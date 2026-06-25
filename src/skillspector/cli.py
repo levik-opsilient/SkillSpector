@@ -49,21 +49,14 @@ def _ensure_utf8_streams() -> None:
     box-drawing characters and icons used in the terminal report, which raises
     UnicodeEncodeError. Reconfiguring with errors="replace" makes output robust
     across platforms without crashing.
-
-    Streams that already use UTF-8 are left untouched, so strict encoding
-    behaviour is preserved where it already works (e.g. most POSIX consoles).
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None:
-            continue
-        encoding = getattr(stream, "encoding", None)
-        if encoding and encoding.lower().replace("-", "") == "utf8":
-            continue
-        try:
-            reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):
-            logger.debug("Could not reconfigure %s to UTF-8", stream)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                logger.debug("Could not reconfigure %s to UTF-8", stream)
 
 
 _ensure_utf8_streams()

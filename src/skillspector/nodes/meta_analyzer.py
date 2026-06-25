@@ -538,9 +538,6 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             # Some batches never returned. A finding the LLM never saw has no
             # verdict — keep it via the fallback path instead of letting
             # apply_filter treat the missing confirmation as a rejection.
-            # get_batches passes through the same Finding objects from
-            # `findings`; if that ever changes, id-based partitioning fails
-            # closed by keeping copied findings as unanalysed.
             analysed_ids = {id(f) for batch, _ in batch_results for f in batch.findings}
             analysed = [f for f in findings if id(f) in analysed_ids]
             unanalysed = [f for f in findings if id(f) not in analysed_ids]
