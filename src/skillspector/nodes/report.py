@@ -22,6 +22,8 @@ based on state["output_format"]. Single place for formatting (CLI and REST API r
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import StringIO
 from typing import Literal
@@ -63,6 +65,38 @@ _RISK_RECOMMENDATION: dict[str, str] = {
     "HIGH": "DO_NOT_INSTALL",
     "CRITICAL": "DO_NOT_INSTALL",
 }
+
+
+# Scanned skill content (and LLM output that quotes it) can carry ANSI escape
+# sequences and control bytes (e.g. NUL, ESC) into finding text. Left in, they
+# make a rendered report register as binary — GitLab/editors show "download"
+# instead of the Markdown, and terminals emit garbled output. Strip them from
+# every finding text field so all report formats stay clean UTF-8.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+# Finding free-text fields that may carry scanned/LLM content.
+_SANITIZED_FIELDS = (
+    "message",
+    "explanation",
+    "remediation",
+    "finding",
+    "context",
+    "matched_text",
+    "code_snippet",
+)
+
+
+def _clean_text(value: str | None) -> str | None:
+    """Strip ANSI escape sequences and disallowed control chars (keep tab/newline)."""
+    if not isinstance(value, str):
+        return value
+    return _CONTROL_RE.sub("", _ANSI_RE.sub("", value))
+
+
+def _sanitize_finding(finding: Finding) -> Finding:
+    """Return a copy of *finding* with control/ANSI bytes stripped from text fields."""
+    return replace(finding, **{f: _clean_text(getattr(finding, f)) for f in _SANITIZED_FIELDS})
 
 
 def _severity_to_sarif_level(severity: str) -> Literal["error", "warning", "note"]:
@@ -546,6 +580,10 @@ def report(state: SkillspectorState) -> dict[str, object]:
     """
     raw_findings = state.get("findings", [])
     filtered_findings = state.get("filtered_findings", raw_findings)
+    # Strip ANSI/control bytes once here so every downstream format (terminal,
+    # json, markdown, sarif) and the returned findings stay clean UTF-8. Applied
+    # before partition/dedup so active and suppressed findings are both clean.
+    filtered_findings = [_sanitize_finding(f) for f in filtered_findings]
     component_metadata = state.get("component_metadata") or []
     components = state.get("components") or []
     file_cache = state.get("file_cache") or {}
