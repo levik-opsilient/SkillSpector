@@ -22,7 +22,6 @@ LangChain structured output for validated, schema-driven LLM responses.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Literal
 
