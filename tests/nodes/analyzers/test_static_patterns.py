@@ -131,6 +131,26 @@ class TestRunStaticPatternsPromptInjection:
         findings = static_runner.run_static_patterns(state, [prompt_injection_module])
         assert not any(f.rule_id == "P2" for f in findings)
 
+    def test_p2_emoji_zwj_sequence_no_false_positive(self):
+        """A legitimate emoji ZWJ sequence must NOT yield P2."""
+        judge = "\U0001f9d1\u200d\u2696\ufe0f"
+        technologist = "\U0001f469\U0001f3fd\u200d\U0001f4bb"
+        state = {
+            "components": ["skill.md"],
+            "file_cache": {"skill.md": f"Supported role emoji: {judge} {technologist}."},
+        }
+        findings = static_runner.run_static_patterns(state, [prompt_injection_module])
+        assert not any(f.rule_id == "P2" for f in findings)
+
+    def test_p2_bare_zero_width_joiner_still_produces_finding(self):
+        """A bare ZWJ in text still yields P2."""
+        state = {
+            "components": ["skill.md"],
+            "file_cache": {"skill.md": "normal text\u200dSYSTEM override"},
+        }
+        findings = static_runner.run_static_patterns(state, [prompt_injection_module])
+        assert any(f.rule_id == "P2" for f in findings)
+
     def test_p2_emoji_wrapped_smuggling_still_flagged(self):
         """Adversarial: an attacker wraps a smuggled instruction between the
         emoji base U+1F3F4 and U+E007F CANCEL TAG to mimic a subdivision flag
