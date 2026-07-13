@@ -159,7 +159,7 @@ Scan entire directories of skills in parallel from `contrib/batch_scan/`:
 
 ```bash
 python -m contrib.batch_scan.batch_scan ./my-skills/ --no-llm
-python -m contrib.batch_scan.batch_scan ./my-skills/ --workers 20 -f json -o report.json 
+python -m contrib.batch_scan.batch_scan ./my-skills/ --workers 20 -f json -o report.json
 python -m contrib.batch_scan.batch_scan ./tests/fixtures/ -f terminal --workers 20
 ```
 
