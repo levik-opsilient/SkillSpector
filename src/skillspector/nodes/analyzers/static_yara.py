@@ -26,7 +26,6 @@ import base64
 import binascii
 import hashlib
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import yara
 
@@ -94,63 +93,56 @@ def _rule_namespace(rule_file: Path) -> str:
     return rule_file.stem
 
 
-def _materialize_rule_file(
-    rule_file: Path, temp_dir: Path | None = None, namespace: str | None = None
-) -> Path:
-    """Return a compile-ready rule path, decoding embedded sources when needed."""
+def _read_rule_source(rule_file: Path) -> str:
+    """Read a YARA rule source, decoding embedded packaged rules when needed."""
     if not rule_file.name.endswith(_ENCODED_RULE_SUFFIXES):
-        return rule_file
-    if temp_dir is None:
-        raise ValueError("temp_dir is required for encoded rule files")
+        return rule_file.read_text(encoding="utf-8")
 
     encoded_source = rule_file.read_text(encoding="utf-8")
-    decoded_source = base64.b64decode("".join(encoded_source.split())).decode("utf-8")
-    temp_name = (namespace or _rule_namespace(rule_file)).replace("/", "__")
-    temp_file = temp_dir / f"{temp_name}.yar"
-    temp_file.write_text(decoded_source, encoding="utf-8")
-    return temp_file
+    return base64.b64decode("".join(encoded_source.split())).decode("utf-8")
 
 
 def _build_namespace_map(
     rule_files: list[Path], temp_dir: Path | None = None
 ) -> tuple[dict[str, str], int]:
-    """Build a {namespace: filepath} dict and count malformed encoded files."""
-    filepaths: dict[str, str] = {}
+    """Build a {namespace: source} dict and count malformed rule files."""
+    del temp_dir
+    sources: dict[str, str] = {}
     skipped = 0
     for rf in rule_files:
         ns = _rule_namespace(rf)
-        if ns in filepaths:
+        if ns in sources:
             ns = f"{rf.parent.name}/{ns}"
         try:
-            filepaths[ns] = str(_materialize_rule_file(rf, temp_dir, ns))
+            sources[ns] = _read_rule_source(rf)
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             skipped += 1
             logger.debug("%s: skipping malformed encoded rule %s: %s", ANALYZER_ID, rf, exc)
-    return filepaths, skipped
+    return sources, skipped
 
 
-def _compile_rules(filepaths: dict[str, str]) -> tuple[yara.Rules | None, int]:
-    """Compile YARA rules from a namespace map. Falls back to per-file compilation on error.
+def _compile_rules(sources: dict[str, str]) -> tuple[yara.Rules | None, int]:
+    """Compile YARA rules from a namespace map. Falls back to per-source compilation on error.
 
     Returns (compiled_rules, skipped_count).
     """
     try:
-        return yara.compile(filepaths=filepaths), 0
+        return yara.compile(sources=sources), 0
     except yara.SyntaxError:
         pass
 
-    logger.debug("%s: bulk compile failed, falling back to per-file compilation", ANALYZER_ID)
+    logger.debug("%s: bulk compile failed, falling back to per-source compilation", ANALYZER_ID)
     good: dict[str, str] = {}
     skipped = 0
-    for ns, fp in filepaths.items():
+    for ns, source in sources.items():
         try:
-            yara.compile(filepath=fp)
-            good[ns] = fp
+            yara.compile(source=source)
+            good[ns] = source
         except (yara.SyntaxError, yara.Error) as exc:
             skipped += 1
-            logger.debug("%s: skipping %s: %s", ANALYZER_ID, fp, exc)
+            logger.debug("%s: skipping %s: %s", ANALYZER_ID, ns, exc)
 
-    compiled = yara.compile(filepaths=good) if good else None
+    compiled = yara.compile(sources=good) if good else None
     return compiled, skipped
 
 
@@ -176,22 +168,19 @@ def _load_rules(extra_dir: Path | None = None) -> yara.Rules | None:
     if _compiled_rules is not None and _rules_hash == current_hash:
         return _compiled_rules
 
-    with TemporaryDirectory() as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        filepaths, materialize_skipped = _build_namespace_map(rule_files, temp_dir)
+    sources, materialize_skipped = _build_namespace_map(rule_files)
+    compiled, compile_skipped = _compile_rules(sources)
+    skipped = materialize_skipped + compile_skipped
 
-        compiled, compile_skipped = _compile_rules(filepaths)
-        skipped = materialize_skipped + compile_skipped
+    if compiled is None:
+        logger.warning("%s: failed to compile any YARA rules", ANALYZER_ID)
+        return None
 
-        if compiled is None:
-            logger.warning("%s: failed to compile any YARA rules", ANALYZER_ID)
-            return None
-
-        _compiled_rules = compiled
-        _rules_hash = current_hash
-        loaded = len(filepaths) - compile_skipped
-        logger.info("%s: compiled %d YARA rule file(s) (%d skipped)", ANALYZER_ID, loaded, skipped)
-        return compiled
+    _compiled_rules = compiled
+    _rules_hash = current_hash
+    loaded = len(sources) - compile_skipped
+    logger.info("%s: compiled %d YARA rule file(s) (%d skipped)", ANALYZER_ID, loaded, skipped)
+    return compiled
 
 
 def _extract_match_strings(match: yara.Match) -> tuple[int, str | None]:

@@ -499,6 +499,7 @@ class TestRunAsync:
 
     def test_run_async_with_running_loop(self) -> None:
         """Test run_async works correctly even when there is already a running event loop.
+
         This regression test covers the scenario where SkillSpector is invoked from
         environments like Jupyter Notebooks, FastAPI, or LangGraph Studio that already
         have an active event loop.

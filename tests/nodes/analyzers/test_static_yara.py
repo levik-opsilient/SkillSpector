@@ -462,8 +462,7 @@ class TestHelpers:
         encoded_file = tmp_path / "encoded.yar.b64"
         encoded_file.write_text(encoded_source)
         ns_map, skipped = static_yara._build_namespace_map([encoded_file], tmp_path)
-        decoded_path = Path(ns_map["encoded"])
-        assert decoded_path.read_text() == "rule encoded { condition: false }"
+        assert ns_map["encoded"] == "rule encoded { condition: false }"
         assert skipped == 0
 
     def test_build_namespace_map_keeps_encoded_namespace_collisions_apart(self, tmp_path):
@@ -482,11 +481,9 @@ class TestHelpers:
             [first_file, second_file], materialized_dir
         )
 
-        first_path = Path(ns_map["malware"])
-        second_path = Path(ns_map["extra/malware"])
-        assert first_path != second_path
-        assert first_path.read_text() == "rule first { condition: false }"
-        assert second_path.read_text() == "rule second { condition: false }"
+        assert set(ns_map) == {"malware", "extra/malware"}
+        assert ns_map["malware"] == "rule first { condition: false }"
+        assert ns_map["extra/malware"] == "rule second { condition: false }"
         assert skipped == 0
 
     def test_build_namespace_map_skips_malformed_encoded_rules(self, tmp_path):
