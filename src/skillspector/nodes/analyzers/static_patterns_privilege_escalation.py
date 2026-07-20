@@ -112,6 +112,41 @@ PE5_PATTERNS = [
     (r"""\bunshare\b['",\s]+--(?:user|mount|pid)""", 0.85),
 ]
 
+_READ_ONLY_PASSWD_VOLUME = re.compile(
+    r"\b(?:docker|podman)\s+run\b"
+    r"(?:(?:\\\r?\n)|[^\n;&|]){0,1000}?"
+    r"(?:-v|--volume)(?:=|\s+)"
+    r"(?P<quote>['\"]?)"
+    r"(?P<source>/etc/passwd):(?P<target>/etc/passwd):ro"
+    r"(?P=quote)(?=$|[\s\\])",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _is_read_only_passwd_volume_match(content: str, match: re.Match[str]) -> bool:
+    """Return True only when *match* is part of an exact read-only UID-map mount.
+
+    Binding the exemption to the matched span prevents a nearby legitimate
+    volume from hiding a separate ``cat /etc/passwd`` or equivalent access.
+    Writable, implicit-mode, alternate-source, and alternate-target mounts are
+    intentionally left as PE3 findings.
+    """
+
+    if match.group(0).lower() != "/etc/passwd":
+        return False
+
+    for volume in _READ_ONLY_PASSWD_VOLUME.finditer(content):
+        source_contains_match = volume.start(
+            "source"
+        ) <= match.start() and match.end() <= volume.end("source")
+        target_contains_match = volume.start(
+            "target"
+        ) <= match.start() and match.end() <= volume.end("target")
+        if not (source_contains_match or target_contains_match):
+            continue
+        return True
+    return False
+
 
 def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFinding]:
     """Analyze content for privilege escalation patterns (PE1–PE5)."""
@@ -161,6 +196,8 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
             line_num = get_line_number(content, match.start())
             context = get_context(content, match.start())
             if _is_documentation_example(context, file_type):
+                continue
+            if _is_read_only_passwd_volume_match(content, match):
                 continue
             findings.append(
                 AnalyzerFinding(
