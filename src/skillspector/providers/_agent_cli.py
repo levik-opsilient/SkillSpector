@@ -210,6 +210,10 @@ def _build_claude_argv(binary: str, model: str, max_output_tokens: int) -> list[
         Use only MCP servers from ``--mcp-config`` — which we never pass — so
         zero MCP servers load. (Note: ``--no-mcp-config`` is NOT a real flag.)
 
+    ``--setting-sources=``
+        Load no user, project, or local settings, preventing their hooks from
+        running in the spawned Claude CLI process.
+
     ``--disable-slash-commands``
         Prevents skill/plugin invocations from within the sandboxed call.
 
@@ -236,6 +240,7 @@ def _build_claude_argv(binary: str, model: str, max_output_tokens: int) -> list[
         "--permission-mode",
         "dontAsk",
         "--strict-mcp-config",
+        "--setting-sources=",
         "--disable-slash-commands",
     ]
 
